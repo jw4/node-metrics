@@ -20,7 +20,17 @@ func main() {
 	caFile := flag.String("tls-ca", "", "path to the internal-ca root cert (required unless -nats-url is in-cluster)")
 	metric := flag.String("metric", "cpu_temp", "metric to display")
 	window := flag.Duration("window", time.Hour, "backfill window on start / host switch")
+	logFile := flag.String("log-file", "", "optional path to log backfill/connection errors to (bubbletea takes over the terminal, so errors are never written to stderr while running -- set this to see them)")
 	flag.Parse()
+
+	if *logFile != "" {
+		f, err := tea.LogToFile(*logFile, "node-metrics-tui ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: log-file: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+	}
 
 	if *credsFile == "" {
 		fmt.Fprintln(os.Stderr, "error: -creds is required")

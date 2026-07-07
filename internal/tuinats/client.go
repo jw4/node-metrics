@@ -8,7 +8,9 @@ package tuinats
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -177,9 +179,26 @@ func (c *Client) StreamHost(ctx context.Context, metric, host string, window tim
 						msgs.Stop()
 					}
 				}
+			} else if !errors.Is(lErr, jetstream.ErrMsgNotFound) {
+				// A real lookup failure (e.g. a misconfigured/under-scoped
+				// subject permission) rather than the expected "no messages
+				// for this host yet" case -- surface it instead of silently
+				// rendering an empty graph. log.Printf is safe here only
+				// because bubbletea's tea.LogToFile (wired up in
+				// cmd/tui/main.go via the opt-in -log-file flag) redirects
+				// the standard log package's output away from stderr before
+				// the TUI takes over the terminal; without -log-file this
+				// still goes to stderr by design (see the flag's help text).
+				log.Printf("tuinats: backfill lookup failed for %s: %v", filterSubj, lErr)
 			}
-			// lErr != nil (e.g. jetstream.ErrMsgNotFound): no messages for
-			// this subject yet, skip straight to the live-forwarding loop.
+			// lErr == jetstream.ErrMsgNotFound: no messages for this subject
+			// yet, skip straight to the live-forwarding loop.
+		} else {
+			// c.js.Stream normally can't fail here -- the collector always
+			// creates NODE_METRICS first -- so any error, including
+			// jetstream.ErrStreamNotFound, is unexpected and worth
+			// surfacing rather than silently skipping backfill.
+			log.Printf("tuinats: backfill stream lookup failed for %s: %v", filterSubj, sErr)
 		}
 
 		for {
