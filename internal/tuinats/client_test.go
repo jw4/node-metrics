@@ -3,13 +3,16 @@ package tuinats
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 
 	"github.com/jw4/node-metrics/internal/collectnats"
 	"github.com/jw4/node-metrics/internal/testutil"
@@ -358,6 +361,166 @@ func TestStreamHost_BackfillLoggingErrorsIs(t *testing.T) {
 			t.Fatalf("expected the lErr (GetLastMsgForSubject) branch to fire, not the sErr (Stream) branch: %q", got)
 		}
 	})
+}
+
+// TestNew_ErrorHandlerLogsAsyncPermissionViolation covers the Task 22 fix:
+// New() registers a custom nats.ErrorHandler so that when nats.go has no
+// custom handler, its own defaultErrHandler (vendored nats.go:1806-1827)
+// would otherwise write async errors straight to os.Stderr and corrupt the
+// TUI's alt-screen terminal. This test forces a genuine ASYNC (not
+// synchronous, not New()'s own initial connect error) permission violation:
+// the restricted user's SubscribeSync call to a denied subject succeeds
+// locally (the client just sends a SUB frame), and the server's rejection
+// arrives afterwards as an out-of-band -ERR that nats.go delivers only
+// through the async error callback -- exactly the "permission violation" and
+// "slow-consumer drop" hazard the fix's comment describes.
+//
+// nats.go's own permission-violation handling (processTransientError,
+// vendored nats.go:3779-3806) always invokes the async callback with a nil
+// *nats.Subscription, so this test exercises the handler's nil-subject
+// branch; see TestNew_ErrorHandlerFormatsSubjectWhenAvailable below for the
+// non-nil branch.
+func TestNew_ErrorHandlerLogsAsyncPermissionViolation(t *testing.T) {
+	var buf syncBuffer
+	restore := redirectLogWriter(&buf)
+	defer restore()
+
+	const (
+		restrictedUser = "restricted"
+		restrictedPass = "restrictedpw"
+		deniedSubject  = "denied.subject"
+	)
+	s := testutil.StartJetStreamServer(t, func(o *server.Options) {
+		o.Users = []*server.User{
+			{
+				Username: restrictedUser,
+				Password: restrictedPass,
+				Permissions: &server.Permissions{
+					Subscribe: &server.SubjectPermission{
+						Allow: []string{">"},
+						Deny:  []string{deniedSubject},
+					},
+				},
+			},
+		}
+	})
+	ctx := context.Background()
+
+	tc, err := New(ctx, Config{Address: withCreds(s.ClientURL(), restrictedUser, restrictedPass)})
+	if err != nil {
+		t.Fatalf("tuinats.New: %v", err)
+	}
+	defer tc.Close()
+
+	sub, err := tc.nc.SubscribeSync(deniedSubject)
+	if err != nil {
+		t.Fatalf("SubscribeSync: %v", err)
+	}
+	defer sub.Unsubscribe()
+
+	waitForLog(t, &buf, "tuinats: async error:")
+
+	got := buf.String()
+	if !strings.Contains(strings.ToLower(got), "permission") {
+		t.Fatalf("expected the logged error to mention a permission violation, got %q", got)
+	}
+	if !strings.Contains(got, deniedSubject) {
+		t.Fatalf("expected the logged error to include the denied subject %q, got %q", deniedSubject, got)
+	}
+}
+
+// TestNew_ErrorHandlerFormatsSubjectWhenAvailable covers the sub != nil
+// formatting branch that TestNew_ErrorHandlerLogsAsyncPermissionViolation
+// cannot reach: as read directly from vendored nats.go (every call site of
+// asyncErrorCB except the ErrSlowConsumer one at nats.go:3760 passes a nil
+// sub -- see nats.go:2889, 2908, 2921, 3804, 3818, 3865), the only genuine
+// async trigger with a non-nil subscription is a slow-consumer channel
+// overflow, which depends on winning a race against nats.go's own read loop
+// draining the socket and is not a clean, deterministic trigger to hang a
+// test on. Instead, this test invokes the exact function object New()
+// registered via nats.ErrorHandler (retrieved from the live *nats.Conn's
+// Opts.AsyncErrorCB, not a re-implementation) with a synthetic
+// *nats.Subscription, per the brief's documented fallback for this branch.
+func TestNew_ErrorHandlerFormatsSubjectWhenAvailable(t *testing.T) {
+	var buf syncBuffer
+	restore := redirectLogWriter(&buf)
+	defer restore()
+
+	s := testutil.StartJetStreamServer(t)
+	ctx := context.Background()
+
+	tc, err := New(ctx, Config{Address: s.ClientURL()})
+	if err != nil {
+		t.Fatalf("tuinats.New: %v", err)
+	}
+	defer tc.Close()
+
+	cb := tc.nc.Opts.AsyncErrorCB
+	if cb == nil {
+		t.Fatal("expected New() to register a custom nats.ErrorHandler, got nil AsyncErrorCB")
+	}
+
+	sub := &nats.Subscription{Subject: "some.synthetic.subject"}
+	boom := errors.New("boom")
+	cb(tc.nc, sub, boom)
+
+	got := buf.String()
+	if !strings.Contains(got, "some.synthetic.subject") {
+		t.Fatalf("expected the logged error to include the subscription subject, got %q", got)
+	}
+	if !strings.Contains(got, "boom") {
+		t.Fatalf("expected the logged error to include the underlying error, got %q", got)
+	}
+}
+
+// syncBuffer is a concurrency-safe io.Writer, needed because nats.go invokes
+// the async ErrorHandler from its own dispatcher goroutine
+// (asyncCBDispatcher), unlike the synchronous backfill-logging tests above
+// which get a happens-before edge for free by draining a channel to closure.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// redirectLogWriter is redirectLog's syncBuffer-flavored counterpart, needed
+// wherever the log output is observed from a goroutine other than the one
+// that triggered it (see syncBuffer's doc comment).
+func redirectLogWriter(w *syncBuffer) func() {
+	prevOut := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(w)
+	log.SetFlags(0)
+	return func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	}
+}
+
+// waitForLog polls buf until it contains substr or the bound elapses.
+func waitForLog(t *testing.T, buf *syncBuffer, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if strings.Contains(buf.String(), substr) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for log output to contain %q, got %q", substr, buf.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // withCreds inserts user:pass@ into a "nats://host:port" URL the way

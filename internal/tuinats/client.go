@@ -42,6 +42,23 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		nats.Name("node-metrics-tui"),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
+		// Without this, nats.go installs its own defaultErrHandler (see
+		// vendored nats.go:1779-1780), which writes async errors -- e.g. a
+		// permission violation or a slow-consumer drop -- straight to
+		// os.Stderr (nats.go:1806-1827). That corrupts the terminal while
+		// bubbletea has it in alt-screen mode, the same failure mode Task
+		// 21's -log-file mechanism exists to avoid for backfill lookup
+		// errors. log.Printf is safe here for the same reason noted below:
+		// cmd/tui/main.go's opt-in -log-file flag redirects the standard
+		// log package's output away from stderr before the TUI takes over;
+		// without it this still goes to stderr by design.
+		nats.ErrorHandler(func(_ *nats.Conn, sub *nats.Subscription, err error) {
+			if sub != nil {
+				log.Printf("tuinats: async error on subscription %q: %v", sub.Subject, err)
+			} else {
+				log.Printf("tuinats: async error: %v", err)
+			}
+		}),
 	}
 	if cfg.CredsFile != "" {
 		opts = append(opts, nats.UserCredentials(cfg.CredsFile))
