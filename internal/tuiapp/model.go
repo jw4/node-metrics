@@ -123,6 +123,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // stale tick from an earlier keypress -- ignore
 		}
 		m.debounceActive = false
+		if m.pendingIdx == m.activeIdx {
+			return m, nil // net-zero switch -- no-op, avoid reconnecting the already-active host
+		}
 		m.activeIdx = m.pendingIdx
 		return m, m.activateHost(m.hosts[m.activeIdx])
 

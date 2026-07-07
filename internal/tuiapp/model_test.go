@@ -3,6 +3,7 @@ package tuiapp
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,56 @@ func TestModel_StaleDebounceTickIsIgnoredAfterASwitchAlreadyApplied(t *testing.T
 	}
 }
 
+func TestModel_NetZeroSwitchDoesNotReconnectSameHost(t *testing.T) {
+	fs := &fakeStreamer{streams: map[string]chan tuinats.Point{}}
+	m := New(context.Background(), fs, "cpu_temp", []string{"belfalas"}, time.Hour)
+	m.Init()
+	fs.calls = nil // reset; only interested in what happens after the switch
+
+	_, tickCmd := m.Update(tea.KeyMsg{Type: tea.KeyRight}) // wraps back to index 0 (only one host)
+	updated, cmd := m.Update(runCmd(tickCmd))
+	next := updated.(*Model)
+	if next.activeIdx != 0 {
+		t.Fatalf("activeIdx = %d, want 0 (unchanged)", next.activeIdx)
+	}
+	if len(fs.calls) != 0 {
+		t.Fatalf("expected no StreamHost call for a net-zero host switch, got %v", fs.calls)
+	}
+	if len(fs.cancels) != 0 {
+		t.Fatalf("expected no cancel for a net-zero host switch, got %v", fs.cancels)
+	}
+	if cmd != nil {
+		t.Fatal("expected no Cmd for a net-zero host switch")
+	}
+}
+
+func TestModel_FullCycleNetZeroSwitchDoesNotReconnect(t *testing.T) {
+	fs := &fakeStreamer{streams: map[string]chan tuinats.Point{}}
+	hosts := []string{"belfalas", "r710", "nkul"}
+	m := New(context.Background(), fs, "cpu_temp", hosts, time.Hour)
+	m.Init()
+	fs.calls = nil // reset; only interested in what happens after the switch
+
+	var tickCmd tea.Cmd
+	for range hosts {
+		_, tickCmd = m.Update(tea.KeyMsg{Type: tea.KeyRight}) // each reschedules; final press lands back on start
+	}
+	updated, cmd := m.Update(runCmd(tickCmd))
+	next := updated.(*Model)
+	if next.activeIdx != 0 {
+		t.Fatalf("activeIdx = %d, want 0 (unchanged after full cycle)", next.activeIdx)
+	}
+	if len(fs.calls) != 0 {
+		t.Fatalf("expected no StreamHost call for a full-cycle net-zero switch, got %v", fs.calls)
+	}
+	if len(fs.cancels) != 0 {
+		t.Fatalf("expected no cancel for a full-cycle net-zero switch, got %v", fs.cancels)
+	}
+	if cmd != nil {
+		t.Fatal("expected no Cmd for a full-cycle net-zero switch")
+	}
+}
+
 func TestModel_PointMsgAppendsAndReArmsListening(t *testing.T) {
 	fs := &fakeStreamer{streams: map[string]chan tuinats.Point{}}
 	m := New(context.Background(), fs, "cpu_temp", []string{"belfalas"}, time.Hour)
@@ -131,16 +182,7 @@ func TestModel_RendersLatestValueInTitle(t *testing.T) {
 	m.points["belfalas"] = []float64{65, 71}
 
 	view := m.View()
-	if !contains(view, "belfalas") || !contains(view, "71") {
+	if !strings.Contains(view, "belfalas") || !strings.Contains(view, "71") {
 		t.Fatalf("view missing host name or latest value: %q", view)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
