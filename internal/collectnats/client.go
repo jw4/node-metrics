@@ -95,7 +95,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		TTL:     cfg.KVTTL,
 		Storage: jetstream.FileStorage,
 		RePublish: &jetstream.RePublish{
-			Source:      fmt.Sprintf("$KV.%s.>", KVBucket),
+			Source:      fmt.Sprintf("$KV.%s.>", KVBucket), // Must be scoped to $KV.<bucket>.> to republish only KV data, not all account subjects
 			Destination: LiveSubjectPrefix + ">",
 		},
 	})
