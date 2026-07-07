@@ -103,8 +103,9 @@ func main() {
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
+	srv := &http.Server{Addr: healthzAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		if err := http.ListenAndServe(healthzAddr, mux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("collector: healthz server failed", "err", err)
 		}
 	}()
@@ -117,6 +118,11 @@ func main() {
 		}
 		select {
 		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				slog.Warn("collector: healthz server shutdown failed", "err", err)
+			}
 			return
 		case <-ticker.C:
 		}
