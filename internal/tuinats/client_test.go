@@ -3,10 +3,13 @@ package tuinats
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats-server/v2/server"
 
 	"github.com/jw4/node-metrics/internal/collectnats"
 	"github.com/jw4/node-metrics/internal/testutil"
@@ -275,6 +278,94 @@ func TestStreamHost_BackfillLoggingErrorsIs(t *testing.T) {
 			t.Fatalf("expected stream lookup failure to be logged, got %q", got)
 		}
 	})
+
+	// This subtest exercises the branch the other two miss: a real, non-nil
+	// lErr from GetLastMsgForSubject itself that is NOT jetstream.ErrMsgNotFound
+	// -- the exact shape of the motivating scenario (a misconfigured or
+	// under-scoped node-metrics-tui subject permission masking a host that
+	// genuinely has history). It forces this deterministically against the
+	// real embedded server -- no mock of the jetstream.JetStream interface --
+	// by adding a second, permission-restricted NATS user whose publish is
+	// allowed everywhere except $JS.API.STREAM.MSG.GET.>, so c.js.Stream
+	// (which uses $JS.API.STREAM.INFO.>) still succeeds but
+	// GetLastMsgForSubject's request is silently dropped server-side and the
+	// call fails once the bounded context deadline fires, instead of
+	// returning jetstream.ErrMsgNotFound.
+	t.Run("GetLastMsgForSubject permission failure is logged", func(t *testing.T) {
+		var buf bytes.Buffer
+		restore := redirectLog(&buf)
+		defer restore()
+
+		const (
+			adminUser      = "admin"
+			adminPass      = "adminpw"
+			restrictedUser = "restricted"
+			restrictedPass = "restrictedpw"
+		)
+		s := testutil.StartJetStreamServer(t, func(o *server.Options) {
+			o.Users = []*server.User{
+				{Username: adminUser, Password: adminPass}, // unrestricted, mirrors the collector's own account access
+				{
+					Username: restrictedUser,
+					Password: restrictedPass,
+					Permissions: &server.Permissions{
+						Publish: &server.SubjectPermission{
+							Allow: []string{">"},
+							Deny:  []string{"$JS.API.STREAM.MSG.GET.>"},
+						},
+					},
+				},
+			}
+		})
+		ctx := context.Background()
+
+		// Set up the stream and publish real data for "belfalas" using the
+		// unrestricted admin user, exactly like the collector would.
+		collector, err := collectnats.New(ctx, collectnats.Config{Address: withCreds(s.ClientURL(), adminUser, adminPass), MaxAge: time.Hour, MaxBytes: 1 << 20, KVTTL: 5 * time.Minute})
+		if err != nil {
+			t.Fatalf("collectnats.New: %v", err)
+		}
+		defer collector.Close()
+		must(t, collector.Publish(ctx, "cpu_temp", "belfalas", 71, nil))
+
+		// The client under test connects as the restricted user -- the
+		// under-scoped node-metrics-tui NATS user this task is about.
+		tc, err := New(ctx, Config{Address: withCreds(s.ClientURL(), restrictedUser, restrictedPass)})
+		if err != nil {
+			t.Fatalf("tuinats.New: %v", err)
+		}
+		defer tc.Close()
+
+		// GetLastMsgForSubject's request is published to a subject the
+		// restricted user cannot publish to; the server silently drops it
+		// (no synchronous rejection), so the request only fails once its
+		// context deadline fires. Bound it so the test doesn't hang.
+		backfillCtx, backfillCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer backfillCancel()
+
+		points, cancel, err := tc.StreamHost(backfillCtx, "cpu_temp", "belfalas", time.Hour)
+		if err != nil {
+			t.Fatalf("StreamHost: %v", err)
+		}
+		defer cancel()
+		drainUntilClosed(t, points) // closes once backfillCtx's 2s deadline fires
+
+		got := buf.String()
+		if !strings.Contains(got, "backfill lookup failed") {
+			t.Fatalf("expected the GetLastMsgForSubject permission failure to be logged, got %q", got)
+		}
+		if strings.Contains(got, "backfill stream lookup failed") {
+			t.Fatalf("expected the lErr (GetLastMsgForSubject) branch to fire, not the sErr (Stream) branch: %q", got)
+		}
+	})
+}
+
+// withCreds inserts user:pass@ into a "nats://host:port" URL the way
+// server.Server.ClientURL() returns it, so a test can force a client onto a
+// specific, permission-restricted NATS user without touching Config (which
+// intentionally only exposes CredsFile/RootCAFile, not raw user/pass).
+func withCreds(url, user, pass string) string {
+	return strings.Replace(url, "nats://", fmt.Sprintf("nats://%s:%s@", user, pass), 1)
 }
 
 // redirectLog swaps the standard log package's output to w for the duration
