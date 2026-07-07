@@ -95,6 +95,54 @@ func TestStreamHost_BackfillThenLive(t *testing.T) {
 	}
 }
 
+// TestStreamHost_EmptyBackfillDoesNotHang covers a host whose filter subject
+// has zero messages on NODE_METRICS at the moment StreamHost is called --
+// e.g. a freshly-discovered host whose stream data hasn't landed yet, or a
+// stream MaxAge shorter than the KV bucket's TTL so the KV directory still
+// lists a host the stream has already trimmed. Before the fix, the backfill
+// loop's msgs.Next() call (no NextOpts) could block indefinitely on an
+// ordered consumer with nothing to deliver, and cancel() -- which only
+// closes stop and unsubscribes the live NATS subscription -- had no way to
+// interrupt it. This test bounds the wait so a regression fails fast instead
+// of hanging the suite.
+func TestStreamHost_EmptyBackfillDoesNotHang(t *testing.T) {
+	s := testutil.StartJetStreamServer(t)
+	ctx := context.Background()
+
+	collector, err := collectnats.New(ctx, collectnats.Config{Address: s.ClientURL(), MaxAge: time.Hour, MaxBytes: 1 << 20, KVTTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("collectnats.New: %v", err)
+	}
+	defer collector.Close()
+	// Publish for a different host only, so NODE_METRICS has messages but
+	// none matching "empty-host"'s filter subject.
+	must(t, collector.Publish(ctx, "cpu_temp", "other-host", 42, nil))
+
+	tc, err := New(ctx, Config{Address: s.ClientURL()})
+	if err != nil {
+		t.Fatalf("tuinats.New: %v", err)
+	}
+	defer tc.Close()
+
+	points, cancel, err := tc.StreamHost(ctx, "cpu_temp", "empty-host", time.Hour)
+	if err != nil {
+		t.Fatalf("StreamHost: %v", err)
+	}
+
+	// "empty-host" was never published, so it has zero matching stream
+	// messages. cancel() right away and confirm the out channel closes
+	// promptly instead of the backfill goroutine sitting in msgs.Next().
+	cancel()
+	select {
+	case p, ok := <-points:
+		if ok {
+			t.Fatalf("expected out channel to close with no points, got %+v", p)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("StreamHost did not shut down within 3s after cancel(); backfill loop likely hung in msgs.Next()")
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

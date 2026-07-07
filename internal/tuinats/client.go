@@ -106,8 +106,22 @@ func (c *Client) StreamHost(ctx context.Context, metric, host string, window tim
 		sub.Unsubscribe()
 	}
 
+	// backfillCtx is canceled either when the caller's ctx is done or when
+	// cancel() closes stop, so a blocked msgs.Next() below is always
+	// interruptible -- cancel() itself only closes stop and unsubscribes the
+	// live subscription, neither of which Next() would otherwise observe.
+	backfillCtx, backfillCancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-stop:
+			backfillCancel()
+		case <-backfillCtx.Done():
+		}
+	}()
+
 	go func() {
 		defer close(out)
+		defer backfillCancel()
 		seen := map[int64]struct{}{}
 		emit := func(data []byte) {
 			var p collectnats.Payload
@@ -126,27 +140,42 @@ func (c *Client) StreamHost(ctx context.Context, metric, host string, window tim
 		}
 
 		start := time.Now().Add(-window)
-		cons, err := c.js.OrderedConsumer(ctx, collectnats.StreamName, jetstream.OrderedConsumerConfig{
-			FilterSubjects: []string{filterSubj},
-			DeliverPolicy:  jetstream.DeliverByStartTimePolicy,
-			OptStartTime:   &start,
-		})
-		if err == nil {
-			if msgs, mErr := cons.Messages(); mErr == nil {
-				for {
-					msg, nErr := msgs.Next()
-					if nErr != nil {
-						break
-					}
-					emit(msg.Data())
-					meta, mdErr := msg.Metadata()
-					msg.Ack()
-					if mdErr == nil && meta.NumPending == 0 {
-						break
+
+		// A freshly-discovered host (KV entry present) may have no messages
+		// on the stream yet -- e.g. the stream hasn't caught up, or its
+		// MaxAge is shorter than the KV TTL so the KV directory still lists
+		// a host the stream already trimmed. Check existence up front
+		// (mirroring nats.go's own object.go watch-init pattern, which
+		// calls GetLastMsgForSubject before relying on a delivered message
+		// to detect emptiness) so we skip the ordered consumer entirely
+		// instead of blocking on msgs.Next() with nothing to deliver.
+		if stream, sErr := c.js.Stream(backfillCtx, collectnats.StreamName); sErr == nil {
+			if _, lErr := stream.GetLastMsgForSubject(backfillCtx, filterSubj); lErr == nil {
+				cons, err := c.js.OrderedConsumer(backfillCtx, collectnats.StreamName, jetstream.OrderedConsumerConfig{
+					FilterSubjects: []string{filterSubj},
+					DeliverPolicy:  jetstream.DeliverByStartTimePolicy,
+					OptStartTime:   &start,
+				})
+				if err == nil {
+					if msgs, mErr := cons.Messages(); mErr == nil {
+						for {
+							msg, nErr := msgs.Next(jetstream.NextContext(backfillCtx))
+							if nErr != nil {
+								break
+							}
+							emit(msg.Data())
+							meta, mdErr := msg.Metadata()
+							msg.Ack()
+							if mdErr == nil && meta.NumPending == 0 {
+								break
+							}
+						}
+						msgs.Stop()
 					}
 				}
-				msgs.Stop()
 			}
+			// lErr != nil (e.g. jetstream.ErrMsgNotFound): no messages for
+			// this subject yet, skip straight to the live-forwarding loop.
 		}
 
 		for {
