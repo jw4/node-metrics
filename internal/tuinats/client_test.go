@@ -107,8 +107,10 @@ func TestHosts_AgesOutAfterKVTTLElapsesWithoutRefresh(t *testing.T) {
 	ctx := context.Background()
 
 	// A short TTL (not the production 5m default) so the test observes
-	// expiry in real time without a fake clock.
-	collector, err := collectnats.New(ctx, collectnats.Config{Address: s.ClientURL(), MaxAge: time.Hour, MaxBytes: 1 << 20, KVTTL: 300 * time.Millisecond})
+	// expiry in real time without a fake clock. The TTL and sleep margin
+	// are wide relative to each other (3x) to absorb nats-server's
+	// internal timer jitter on MaxAge/TTL expiry.
+	collector, err := collectnats.New(ctx, collectnats.Config{Address: s.ClientURL(), MaxAge: time.Hour, MaxBytes: 1 << 20, KVTTL: 600 * time.Millisecond})
 	if err != nil {
 		t.Fatalf("collectnats.New: %v", err)
 	}
@@ -126,7 +128,7 @@ func TestHosts_AgesOutAfterKVTTLElapsesWithoutRefresh(t *testing.T) {
 		t.Fatalf("expected 1 host before TTL elapses: %v, %v", hosts, err)
 	}
 
-	time.Sleep(500 * time.Millisecond) // TTL elapsed, no refreshing Publish in between
+	time.Sleep(1800 * time.Millisecond) // TTL elapsed, no refreshing Publish in between
 
 	hosts, err = tc.Hosts(ctx, "cpu_temp")
 	if err != nil {
