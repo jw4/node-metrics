@@ -72,6 +72,7 @@ func main() {
 	promURL := envOr("NODE_METRICS_PROM_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090")
 	natsURL := envOr("NODE_METRICS_NATS_URL", "nats://nats.nats-prime.svc.cluster.local:4222")
 	credsFile := os.Getenv("NODE_METRICS_NATS_CREDS")
+	tlsCAFile := os.Getenv("NODE_METRICS_NATS_TLS_CA") // optional; empty = no explicit CA trust
 	job := envOr("NODE_METRICS_JOB", "node-exporter-external")
 	interval := envDurationOr("NODE_METRICS_INTERVAL", 60*time.Second)
 	maxAge := envDurationOr("NODE_METRICS_MAX_AGE", 7*24*time.Hour)
@@ -83,7 +84,7 @@ func main() {
 	defer stop()
 
 	nc, err := collectnats.New(ctx, collectnats.Config{
-		Address: natsURL, CredsFile: credsFile,
+		Address: natsURL, CredsFile: credsFile, RootCAFile: tlsCAFile,
 		MaxAge: maxAge, MaxBytes: maxBytes, KVTTL: kvTTL,
 	})
 	if err != nil {

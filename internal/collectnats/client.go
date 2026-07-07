@@ -29,11 +29,12 @@ type Payload struct {
 }
 
 type Config struct {
-	Address   string
-	CredsFile string
-	MaxAge    time.Duration
-	MaxBytes  int64
-	KVTTL     time.Duration
+	Address    string
+	CredsFile  string
+	RootCAFile string
+	MaxAge     time.Duration
+	MaxBytes   int64
+	KVTTL      time.Duration
 }
 
 type Client struct {
@@ -59,6 +60,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.CredsFile != "" {
 		opts = append(opts, nats.UserCredentials(cfg.CredsFile))
+	}
+	if cfg.RootCAFile != "" {
+		opts = append(opts, nats.RootCAs(cfg.RootCAFile))
 	}
 
 	nc, err := nats.Connect(cfg.Address, opts...)
