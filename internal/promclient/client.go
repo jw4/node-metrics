@@ -110,5 +110,12 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) ([]byte
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("promclient: unexpected status %d from %s", resp.StatusCode, path)
+	}
+	return body, nil
 }

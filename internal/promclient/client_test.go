@@ -88,6 +88,23 @@ func TestTargets_ColdStartUnreachable(t *testing.T) {
 	}
 }
 
+func TestTargets_NonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal server error"))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	targets, err := c.Targets(t.Context(), "node-exporter-external")
+	if err == nil {
+		t.Fatalf("expected error for non-2xx status, got nil (targets: %+v)", targets)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("expected error to mention status code 500, got: %v", err)
+	}
+}
+
 func TestInstantQuery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.RawQuery, "query=") {
