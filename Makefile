@@ -1,5 +1,5 @@
 IMAGE_REPO ?= ghcr.io/jw4/node-metrics-collector
-IMAGE_TAG  ?= latest
+IMAGE_TAG  ?= v0.1.0
 PLATFORMS  ?= linux/amd64,linux/arm64
 
 .PHONY: build test fmt vet clean docker-build docker-push

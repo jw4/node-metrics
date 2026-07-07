@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 func TestPoller_ReadyOnlyAfterFirstFullPollOfAtLeastOneHost(t *testing.T) {
 	prom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case contains(r.URL.Path, "/targets"):
+		case strings.Contains(r.URL.Path, "/targets"):
 			w.Write([]byte(`{"status":"success","data":{"activeTargets":[
 				{"labels":{"job":"node-exporter-external","instance":"belfalas.w.jw4.us:9100"},"health":"up"}
 			],"droppedTargets":[]}}`))
@@ -93,17 +94,4 @@ func TestPoller_ColdStartUnreachableStaysNotReady(t *testing.T) {
 	if p.Ready() {
 		t.Fatal("expected not-ready when Prometheus is unreachable at cold start")
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || (len(s) > len(sub) && stringsContains(s, sub)))
-}
-
-func stringsContains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
