@@ -20,8 +20,9 @@ import (
 )
 
 type Config struct {
-	Address   string
-	CredsFile string
+	Address    string
+	CredsFile  string
+	RootCAFile string
 }
 
 type Point struct {
@@ -42,6 +43,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.CredsFile != "" {
 		opts = append(opts, nats.UserCredentials(cfg.CredsFile))
+	}
+	if cfg.RootCAFile != "" {
+		opts = append(opts, nats.RootCAs(cfg.RootCAFile))
 	}
 	nc, err := nats.Connect(cfg.Address, opts...)
 	if err != nil {

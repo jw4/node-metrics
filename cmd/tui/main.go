@@ -17,6 +17,7 @@ import (
 func main() {
 	natsURL := flag.String("nats-url", "nats://localhost:4222", "nats-prime external endpoint")
 	credsFile := flag.String("creds", "", "path to the node-metrics-tui .creds file")
+	caFile := flag.String("tls-ca", "", "path to the internal-ca root cert (required unless -nats-url is in-cluster)")
 	metric := flag.String("metric", "cpu_temp", "metric to display")
 	window := flag.Duration("window", time.Hour, "backfill window on start / host switch")
 	flag.Parse()
@@ -27,7 +28,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	client, err := tuinats.New(ctx, tuinats.Config{Address: *natsURL, CredsFile: *credsFile})
+	client, err := tuinats.New(ctx, tuinats.Config{Address: *natsURL, CredsFile: *credsFile, RootCAFile: *caFile})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: connect: %v\n", err)
 		os.Exit(1)
