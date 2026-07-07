@@ -1,0 +1,9 @@
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp1"} 71
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp2"} 71
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp3"} 69
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp4"} 65
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp5"} 65
+node_hwmon_temp_celsius{chip="platform_applesmc_768",sensor="temp1"} 24.25
+node_hwmon_temp_celsius{chip="platform_applesmc_768",sensor="temp5"} 72.5
+node_hwmon_temp_celsius{chip="platform_applesmc_768",sensor="temp6"} 74.25
+node_hwmon_temp_celsius{chip="thermal_thermal_zone0",sensor="temp0"} 52.5
