@@ -45,8 +45,11 @@ Configured entirely by environment variables:
 
 ## TUI
 
+`go install`'s binary is named `tui` (Go names it after the package directory,
+not the module):
+
 ```
-node-metrics-tui -creds tui.creds -nats-url tls://nats.example.com:4222 -tls-ca ca.crt
+tui -creds tui.creds -nats-url tls://nats.example.com:4222 -tls-ca ca.crt
 ```
 
 | Flag        | Default                 | Meaning                                                     |
