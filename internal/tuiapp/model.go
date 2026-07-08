@@ -201,5 +201,5 @@ func (m *Model) View() string {
 	if !m.connected {
 		status = "reconnecting..."
 	}
-	return fmt.Sprintf("%s  |  %s  |  latest: %s\n%s", host, status, latest, graph)
+	return fmt.Sprintf("%s  |  %s  |  %s  |  latest: %s\n%s", m.metric, host, status, latest, graph)
 }

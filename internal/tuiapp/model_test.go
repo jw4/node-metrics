@@ -186,3 +186,14 @@ func TestModel_RendersLatestValueInTitle(t *testing.T) {
 		t.Fatalf("view missing host name or latest value: %q", view)
 	}
 }
+
+func TestModel_RendersMetricNameInTitle(t *testing.T) {
+	fs := &fakeStreamer{streams: map[string]chan tuinats.Point{}}
+	m := New(context.Background(), fs, "disk_used_pct", []string{"belfalas"}, time.Hour)
+	m.points["belfalas"] = []float64{24.66}
+
+	view := m.View()
+	if !strings.Contains(view, "disk_used_pct") {
+		t.Fatalf("view missing metric name: %q", view)
+	}
+}
