@@ -197,3 +197,57 @@ func TestModel_RendersMetricNameInTitle(t *testing.T) {
 		t.Fatalf("view missing metric name: %q", view)
 	}
 }
+
+func TestModel_WindowSizeMsgUpdatesDimensions(t *testing.T) {
+	fs := &fakeStreamer{streams: map[string]chan tuinats.Point{}}
+	m := New(context.Background(), fs, "cpu_temp", []string{"belfalas"}, time.Hour)
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	next := updated.(*Model)
+	if next.width != 40 || next.height != 8 {
+		t.Fatalf("width/height = %d/%d, want 40/8", next.width, next.height)
+	}
+	if cmd != nil {
+		t.Fatal("expected no Cmd from a WindowSizeMsg")
+	}
+}
+
+func TestGraphHeight(t *testing.T) {
+	tests := []struct {
+		name       string
+		paneHeight int
+		want       int
+	}{
+		{"unknown (zero) falls back to default", 0, 10},
+		{"tall pane uses height minus the header line and asciigraph's own +1 row", 24, 22},
+		{"short pane clamps to the minimum", 3, 3},
+		{"very short pane clamps to the minimum", 1, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := graphHeight(tt.paneHeight); got != tt.want {
+				t.Fatalf("graphHeight(%d) = %d, want %d", tt.paneHeight, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGraphWidth(t *testing.T) {
+	tests := []struct {
+		name      string
+		paneWidth int
+		want      int
+	}{
+		{"unknown (zero) means let asciigraph choose", 0, 0},
+		{"wide pane uses width minus the label gutter", 80, 70},
+		{"narrow pane clamps to the minimum", 20, 20},
+		{"very narrow pane clamps to the minimum", 5, 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := graphWidth(tt.paneWidth); got != tt.want {
+				t.Fatalf("graphWidth(%d) = %d, want %d", tt.paneWidth, got, tt.want)
+			}
+		})
+	}
+}

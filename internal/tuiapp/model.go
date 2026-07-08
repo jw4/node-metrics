@@ -53,6 +53,12 @@ type Model struct {
 	debounceActive bool
 
 	connected bool
+
+	// width/height are the pane's real dimensions, from the most recent
+	// tea.WindowSizeMsg (bubbletea delivers one automatically on start, and
+	// again on every resize -- e.g. tmux rebuilding its layout as panes are
+	// added). Zero until the first message arrives.
+	width, height int
 }
 
 func New(ctx context.Context, client hostStreamer, metric string, hosts []string, window time.Duration) *Model {
@@ -108,6 +114,11 @@ func waitForPoint(host string, ch <-chan tuinats.Point) tea.Cmd {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyRight, tea.KeyTab:
@@ -195,11 +206,59 @@ func (m *Model) View() string {
 	}
 	graph := ""
 	if len(series) > 0 {
-		graph = asciigraph.Plot(series, asciigraph.Height(10))
+		opts := []asciigraph.Option{asciigraph.Height(graphHeight(m.height))}
+		if w := graphWidth(m.width); w > 0 {
+			opts = append(opts, asciigraph.Width(w))
+		}
+		graph = asciigraph.Plot(series, opts...)
 	}
 	status := "connected"
 	if !m.connected {
 		status = "reconnecting..."
 	}
 	return fmt.Sprintf("%s  |  %s  |  %s  |  latest: %s\n%s", m.metric, host, status, latest, graph)
+}
+
+// graphHeight sizes the plot to the pane's real height (reserving one line
+// for the status header above it), so a short pane doesn't overflow into its
+// tmux neighbors and a tall one isn't left with wasted empty space below a
+// fixed-size graph. Falls back to a fixed default before the first
+// tea.WindowSizeMsg arrives (only ever matters for the very first render).
+func graphHeight(paneHeight int) int {
+	const (
+		defaultHeight = 10
+		// asciigraph.Height(h) renders h+1 lines (confirmed against its
+		// source: the plot grid is allocated rows+1 tall), so reserving
+		// just 1 line for the header isn't enough -- it undercounts by
+		// exactly that +1, which pushes the header off the top of a tight
+		// pane instead of leaving it visible above the graph.
+		reserved  = 2 // status header line + asciigraph's own extra row
+		minHeight = 3
+	)
+	if paneHeight <= 0 {
+		return defaultHeight
+	}
+	if h := paneHeight - reserved; h >= minHeight {
+		return h
+	}
+	return minHeight
+}
+
+// graphWidth sizes the plot to the pane's real width, reserving room for
+// asciigraph's y-axis label gutter, so the graph doesn't grow past
+// maxPointsShown columns and wrap awkwardly in a narrow pane. Returns 0
+// (asciigraph's own default: one column per data point, uncapped) before the
+// first tea.WindowSizeMsg arrives.
+func graphWidth(paneWidth int) int {
+	const (
+		gutter   = 10
+		minWidth = 20
+	)
+	if paneWidth <= 0 {
+		return 0
+	}
+	if w := paneWidth - gutter; w >= minWidth {
+		return w
+	}
+	return minWidth
 }

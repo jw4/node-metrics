@@ -56,7 +56,7 @@ func main() {
 	}
 
 	model := tuiapp.New(ctx, client, *metric, hosts, *window)
-	program := tea.NewProgram(model)
+	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
