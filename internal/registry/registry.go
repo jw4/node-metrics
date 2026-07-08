@@ -60,7 +60,7 @@ func extractMaxCPUTemp(samples []Sample) (float64, bool) {
 	return max, found
 }
 
-// CPUTemp is the first (and currently only) registry entry.
+// CPUTemp is the first registry entry.
 var CPUTemp = Metric{
 	Name: "cpu_temp",
 	PromQL: func(instance string) string {
@@ -69,5 +69,54 @@ var CPUTemp = Metric{
 	Extract: extractMaxCPUTemp,
 }
 
+// extractSingle returns the lone sample from a query already reduced to
+// exactly one row by its own PromQL (an aggregation or an exact label match),
+// unlike cpu_temp's multi-chip Extract. More or fewer than one row means the
+// query didn't match this host as expected, so it's reported as absent rather
+// than guessing which row to use.
+func extractSingle(samples []Sample) (float64, bool) {
+	if len(samples) != 1 {
+		return 0, false
+	}
+	return samples[0].Value, true
+}
+
+// CPUUsagePct is percent-busy (100 - idle), averaged across cores over the
+// last minute.
+var CPUUsagePct = Metric{
+	Name: "cpu_usage_pct",
+	PromQL: func(instance string) string {
+		return fmt.Sprintf(`100 * (1 - avg(rate(node_cpu_seconds_total{instance=%q,mode="idle"}[1m])))`, instance)
+	},
+	Extract: extractSingle,
+}
+
+// MemoryUsedPct is percent of total memory not available for new allocations.
+var MemoryUsedPct = Metric{
+	Name: "memory_used_pct",
+	PromQL: func(instance string) string {
+		return fmt.Sprintf(`100 * (1 - node_memory_MemAvailable_bytes{instance=%q} / node_memory_MemTotal_bytes{instance=%q})`, instance, instance)
+	},
+	Extract: extractSingle,
+}
+
+// Load1 is the 1-minute load average, already a single scalar per host.
+var Load1 = Metric{
+	Name: "load1",
+	PromQL: func(instance string) string {
+		return fmt.Sprintf(`node_load1{instance=%q}`, instance)
+	},
+	Extract: extractSingle,
+}
+
+// DiskUsedPct is percent used on the root ("/") filesystem.
+var DiskUsedPct = Metric{
+	Name: "disk_used_pct",
+	PromQL: func(instance string) string {
+		return fmt.Sprintf(`100 * (1 - node_filesystem_avail_bytes{instance=%q,mountpoint="/"} / node_filesystem_size_bytes{instance=%q,mountpoint="/"})`, instance, instance)
+	},
+	Extract: extractSingle,
+}
+
 // All is the full set of metrics the collector polls, in registration order.
-var All = []Metric{CPUTemp}
+var All = []Metric{CPUTemp, CPUUsagePct, MemoryUsedPct, Load1, DiskUsedPct}
