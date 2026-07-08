@@ -188,7 +188,6 @@ func (c *Client) StreamHost(ctx context.Context, metric, host string, window tim
 							}
 							emit(msg.Data())
 							meta, mdErr := msg.Metadata()
-							msg.Ack()
 							if mdErr == nil && meta.NumPending == 0 {
 								break
 							}
